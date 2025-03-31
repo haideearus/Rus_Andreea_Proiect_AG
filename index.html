@@ -1,0 +1,298 @@
+﻿<!DOCTYPE html>
+<html lang="ro">
+<head>
+    <meta charset="UTF-8">
+    <title>Harta Stațiilor</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+    <style>
+        #map {
+            height: 500px;
+            margin-top: 20px;
+        }
+
+        select, input, button {
+            font-size: 1em;
+            margin: 4px;
+        }
+
+        #components, #stationList {
+            margin-top: 10px;
+            padding: 8px;
+            border: 1px solid #ccc;
+            max-height: 200px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            background-color: #f8f8f8;
+        }
+    </style>
+</head>
+<body>
+    <h2>🗺️ Gaseste statia si vezi pe harta</h2>
+
+    <label>Tip combustibil:</label><br>
+    <select id="fuelType">
+        <option value="">-- Toate --</option>
+        <option>Motorina</option>
+        <option>Benzina</option>
+        <option>Premium Diesel</option>
+        <option>GPL</option>
+        <option>BENZINA EVO 100 PLUS</option>
+        <option>BENZINA EVO 95</option>
+        <option>Benzina 95</option>
+        <option>Benzina 98</option>
+        <option>Benzina Extra 99</option>
+        <option>Benzina +</option>
+        <option>Diesel</option>
+        <option>ECTO 100</option>
+        <option>ECTO PLUS 95</option>
+        <option>ECTO Super Diesel</option>
+        <option>EURO Plus fara pb</option>
+        <option>EURO Super 98 fara pb</option>
+        <option>Efix Benzina 95</option>
+        <option>Efix Motorina 51</option>
+        <option>EfixS Benzina 98</option>
+        <option>EfixS Motorina 55</option>
+        <option>Euro L Diesel</option>
+        <option>Euroluk COR 95</option>
+        <option>G-Drive 100</option>
+        <option>GPL Auto</option>
+        <option>MOTORINA EVO D</option>
+        <option>MOTORINA EVO D PLUS</option>
+        <option>Motorina EURO</option>
+        <option>Motorina EURO3</option>
+        <option>Motorina Extra</option>
+        <option>Motorina Standard</option>
+        <option>Motorina Super EURO4</option>
+        <option>Motorina superioara</option>
+        <option>Motorina +</option>
+        <option>NANO 95</option>
+        <option>NANO 98</option>
+        <option>NANO DIESEL</option>
+        <option>NANO SUPER DIESEL</option>
+        <option>OMV Diesel</option>
+        <option>OMV MaxxMotion 100 plus</option>
+        <option>OMV MaxxMotion 95</option>
+        <option>OMV MaxxMotion Diesel</option>
+        <option>Premium E Plus</option>
+    </select><br>
+
+    <label>Mod de cautare:</label><br>
+    <select id="mode">
+        <option value="none">🔍 Doar afisare statii si graf</option>
+        <option value="both">🔁 Ambele</option>
+        <option value="nearest">📍 Cea mai apropiata</option>
+        <option value="cheapest">💸 Cea mai ieftina</option>
+    </select><br>
+
+    <label>Rază (km):</label><br>
+    <input type="number" id="radius" value="3" min="1" max="100"><br>
+
+    <button onclick="buildGraphOnly()">📌 Construiește doar graful</button>
+    <button onclick="sendLocation()">🔎 Cauta statii si calculeaza</button>
+    <button onclick="toggleGraph()">📡 Arata/Ascunde graful</button>
+    <br><br>
+
+    <label>Stație A:</label>
+    <select id="stationA"></select>
+    <label>Stație B:</label>
+    <select id="stationB"></select>
+    <button onclick="findRoute()">📍 Drum între A și B</button>
+
+    <div id="map"></div>
+    <div id="components"></div>
+    <div id="stationList"></div>
+    <pre id="response"></pre>
+
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+    <script>
+        let map = L.map('map').setView([45.75, 21.23], 13);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '© OpenStreetMap contributors'
+        }).addTo(map);
+
+        let markers = [], polylines = [], stationMap = {}, circle = null, graphLines = [], userMarker = null, graphVisible = true;
+
+        function clearMap() {
+            markers.forEach(m => map.removeLayer(m));
+            polylines.forEach(p => map.removeLayer(p));
+            graphLines.forEach(g => map.removeLayer(g));
+            if (circle) map.removeLayer(circle);
+            if (userMarker) map.removeLayer(userMarker);
+            markers = [];
+            polylines = [];
+            graphLines = [];
+            document.getElementById("components").innerText = "";
+            document.getElementById("stationList").innerText = "";
+            document.getElementById("response").innerText = "";
+        }
+
+        function toggleGraph() {
+            graphVisible = !graphVisible;
+            graphLines.forEach(line => graphVisible ? map.addLayer(line) : map.removeLayer(line));
+        }
+
+        function buildGraphOnly() {
+            navigator.geolocation.getCurrentPosition(pos => {
+                const lat = pos.coords.latitude;
+                const lon = pos.coords.longitude;
+                console.log("📍 Locație (graf):", lat, lon);
+
+                const radius = document.getElementById("radius").value;
+                clearMap();
+
+                circle = L.circle([lat, lon], {
+                    radius: radius * 1000,
+                    color: 'red',
+                    fillOpacity: 0.1
+                }).addTo(map);
+
+                userMarker = L.marker([lat, lon], {
+                    icon: L.icon({ iconUrl: "https://cdn-icons-png.flaticon.com/512/149/149060.png", iconSize: [24, 24] })
+                }).addTo(map).bindPopup("📍 Curent\nCoords: (" + lat.toFixed(6) + ", " + lon.toFixed(6) + ")").openPopup();
+
+                map.setView([lat, lon], 13);
+
+                fetch(`/graph?lat=${lat}&lon=${lon}`)
+                    .then(res => res.json())
+                    .then(data => {
+                        data.edges.forEach(edge => {
+                            const coords = [
+                                [edge.from[0], edge.from[1]],
+                                [edge.to[0], edge.to[1]]
+                            ];
+                            const line = L.polyline(coords, {
+                                color: "gray",
+                                weight: 2,
+                                opacity: 0.5
+                            });
+                            if (graphVisible) line.addTo(map);
+                            line.bindTooltip(`${edge.distance.toFixed(2)} km`);
+                            graphLines.push(line);
+                        });
+
+                        if (data.components) {
+                            document.getElementById("components").innerText =
+                                `🔗 ${data.components.length} componente conexe\n` +
+                                data.components.map((group, idx) => `Componenta ${idx + 1}:\n` +
+                                    group.map(s => ` - ${s.name} (${s.city})`).join("\n")).join("\n\n");
+                        }
+                    });
+
+                fetch(`/stations?lat=${lat}&lon=${lon}`)
+                    .then(res => res.json())
+                    .then(data => {
+                        const selA = document.getElementById("stationA");
+                        const selB = document.getElementById("stationB");
+                        selA.innerHTML = selB.innerHTML = "";
+                        stationMap = {};
+                        let stationList = "📋 Lista statiilor in raza:\n";
+                        data.forEach((s, idx) => {
+                            const label = `${s.name} (${s.city})`;
+                            stationMap[label] = `${s.latitude},${s.longitude}`;
+                            selA.innerHTML += `<option value="${label}">${label}</option>`;
+                            selB.innerHTML += `<option value="${label}">${label}</option>`;
+
+                            const marker = L.marker([s.latitude, s.longitude]).addTo(map);
+                            const popupText = `${s.name}<br>${s.city}<br>${s.price} RON/L<br>(${s.latitude.toFixed(5)}, ${s.longitude.toFixed(5)})`;
+                            marker.bindPopup(popupText);
+
+                            markers.push(marker);
+                            stationList += `- ${s.name} (${s.city}) - ${s.price} RON/L @ (${s.latitude.toFixed(5)}, ${s.longitude.toFixed(5)})\n`;
+                        });
+                        document.getElementById("stationList").innerText = stationList;
+                    });
+            }, err => {
+                alert("Eroare la obtinerea locatiei: " + err.message);
+            }, {
+                enableHighAccuracy: true,
+                timeout: 10000,
+                maximumAge: 0
+            });
+        }
+
+        function sendLocation() {
+            navigator.geolocation.getCurrentPosition(pos => {
+                const lat = pos.coords.latitude;
+                const lon = pos.coords.longitude;
+                console.log("📍 Locatie (cautare):", lat, lon);
+
+                const fuel = document.getElementById("fuelType").value;
+                const mode = document.getElementById("mode").value;
+                const radius = document.getElementById("radius").value;
+
+                clearMap();
+
+                circle = L.circle([lat, lon], {
+                    radius: radius * 1000,
+                    color: 'red',
+                    fillOpacity: 0.1
+                }).addTo(map);
+
+                userMarker = L.marker([lat, lon], {
+                    icon: L.icon({ iconUrl: "https://cdn-icons-png.flaticon.com/512/149/149060.png", iconSize: [24, 24] })
+                }).addTo(map).bindPopup("📍 Curent\nCoords: (" + lat.toFixed(6) + ", " + lon.toFixed(6) + ")").openPopup();
+
+                map.setView([lat, lon], 13);
+                document.getElementById("response").innerText = `📍 Coordonatele tale: (${lat.toFixed(6)}, ${lon.toFixed(6)})`;
+
+                fetch(`/update?lat=${lat}&lon=${lon}&fuel=${encodeURIComponent(fuel)}&mode=${mode}&radius=${radius}`)
+                    .then(res => res.json())
+                    .then(data => {
+                        if (data.error) {
+                            alert("⚠️ " + data.error);
+                            return;
+                        }
+                        if (data.nearest) addStation(data.nearest, "blue", "Cea mai apropiata", lat, lon);
+                        if (data.cheapest) addStation(data.cheapest, "green", "Cea mai ieftina", lat, lon);
+                    });
+            }, err => {
+                alert("❌ Eroare la obtinerea locatiei: " + err.message);
+            }, {
+                enableHighAccuracy: true,
+                timeout: 10000,
+                maximumAge: 0
+            });
+        }
+
+        function addStation(info, color, label, userLat, userLon) {
+            const marker = L.marker([info.latitude, info.longitude], {
+                icon: L.icon({ iconUrl: "https://cdn-icons-png.flaticon.com/512/684/684908.png", iconSize: [30, 30] })
+            }).addTo(map).bindPopup(label);
+            markers.push(marker);
+            const line = L.polyline([[userLat, userLon], [info.latitude, info.longitude]], { color }).addTo(map);
+            polylines.push(line);
+        }
+
+        function findRoute() {
+            const from = document.getElementById("stationA").value;
+            const to = document.getElementById("stationB").value;
+            if (!stationMap[from] || !stationMap[to]) return;
+
+            graphLines.forEach(g => map.removeLayer(g));
+
+            fetch(`/path?from=${stationMap[from]}&to=${stationMap[to]}`)
+                .then(res => res.json())
+                .then(data => {
+                    if (data.error) {
+                        alert("⚠️ " + data.error);
+                        return;
+                    }
+                    if (!data.path || data.path.length === 0) {
+                        alert("Nu exista drum intre statiile selectate.");
+                        return;
+                    }
+
+                    const coords = data.path.map(coord => [coord[0], coord[1]]);
+                    const pathLine = L.polyline(coords, {
+                        color: "purple",
+                        weight: 4
+                    }).addTo(map);
+                    polylines.push(pathLine);
+
+                    const distText = `🛣️ Distanta totala intre statii: ${data.distance.toFixed(2)} km`;
+                    document.getElementById("response").innerText = distText;
+                });
+        }
+    </script>
+</body>
+</html>
